@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "skullheart:item/particle_accelerator_icon"
+  }
+}
