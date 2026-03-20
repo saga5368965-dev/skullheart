@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "NBN",
+    "ECE",
+    "NBN"
+  ],
+  "key": {
+    "N": { "item": "minecraft:netherite_ingot" },
+    "B": { "item": "minecraft:bell" },
+    "E": { "item": "minecraft:end_crystal" },
+    "C": { "item": "minecraft:nether_star" }
+  },
+  "result": {
+    "item": "skullheart:particle_accelerator",
+    "count": 1
+  }
+}

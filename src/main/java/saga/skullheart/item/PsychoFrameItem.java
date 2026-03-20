@@ -1,10 +1,16 @@
 package saga.skullheart.item;
 
 import net.minecraft.ChatFormatting;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResultHolder;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.Projectile;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -13,13 +19,14 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.common.MinecraftForge;
-import net.minecraftforge.event.entity.EntityJoinLevelEvent;
+import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import org.jetbrains.annotations.Nullable;
 import top.theillusivec4.curios.api.CuriosApi;
 
 import java.util.Comparator;
 import java.util.List;
+import java.util.UUID;
 
 public class PsychoFrameItem extends Item {
 
@@ -28,64 +35,155 @@ public class PsychoFrameItem extends Item {
         MinecraftForge.EVENT_BUS.register(this);
     }
 
+    @Override
+    public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
+        ItemStack stack = player.getItemInHand(hand);
+        CompoundTag tag = stack.getOrCreateTag();
+
+        if (player.isShiftKeyDown()) {
+            // 弾速切り替え (x1.0 ～ x8.0)
+            float speed = tag.getFloat("ProjectileSpeed");
+            if (speed < 1.0f) speed = 1.0f;
+            else if (speed >= 100.0f) speed = 1.0f;
+            else speed *= 2.0f;
+
+            tag.putFloat("ProjectileSpeed", speed);
+            if (!level.isClientSide) {
+                player.displayClientMessage(Component.literal("サイコミュ出力：").append(Component.literal("x" + speed).withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD)), true);
+                level.playSound(null, player.getX(), player.getY(), player.getZ(), SoundEvents.EXPERIENCE_ORB_PICKUP, SoundSource.PLAYERS, 0.5f, 1.5f);
+            }
+        } else {
+            // 索敵範囲切り替え (32mから倍々で最大1024m)
+            int currentRange = tag.getInt("SearchRange");
+            int nextRange;
+            if (currentRange < 32) nextRange = 32;
+            else if (currentRange >= 1024) nextRange = 32;
+            else nextRange = currentRange * 2;
+
+            tag.putInt("SearchRange", nextRange);
+            if (!level.isClientSide) {
+                player.displayClientMessage(Component.literal("索敵限界：").append(Component.literal(nextRange + "m").withStyle(ChatFormatting.GREEN, ChatFormatting.BOLD)), true);
+                level.playSound(null, player.getX(), player.getY(), player.getZ(), SoundEvents.UI_BUTTON_CLICK.get(), SoundSource.PLAYERS, 0.6f, 1.2f);
+            }
+        }
+        return InteractionResultHolder.sidedSuccess(stack, level.isClientSide());
+    }
+
     @SubscribeEvent
-    public void onProjectileSpawn(EntityJoinLevelEvent event) {
-        // クライアント側、または既に除去されているエンティティは無視
-        if (event.getLevel().isClientSide || event.getEntity().isRemoved()) return;
+    public void onProjectileUpdate(TickEvent.LevelTickEvent event) {
+        if (event.phase != TickEvent.Phase.START || event.level.isClientSide || !(event.level instanceof ServerLevel currentLevel)) return;
 
-        if (event.getEntity() instanceof Projectile proj) {
-            // 所有者がいない弾（トラップなど）でのクラッシュを防ぐ
-            if (!(proj.getOwner() instanceof LivingEntity shooter)) return;
+        // 弾丸スキャン範囲（プレイヤーが装備している場合のみ実行）
+        AABB scanArea = new AABB(-20000, -64, -20000, 20000, 320, 20000);
+        event.level.getEntitiesOfClass(Projectile.class, scanArea,
+                        proj -> proj.isAlive() && proj.getOwner() instanceof Player shooter &&
+                                CuriosApi.getCuriosHelper().findFirstCurio(shooter, this).isPresent())
+                .forEach(proj -> {
+                    Player shooter = (Player) proj.getOwner();
+                    CompoundTag nbt = proj.getPersistentData();
+                    ItemStack frame = CuriosApi.getCuriosHelper().findFirstCurio(shooter, this).get().stack();
 
-            // Curiosの装備チェックを安全に行う
-            CuriosApi.getCuriosHelper().findFirstCurio(shooter, this).ifPresent(slotResult -> {
+                    float configSpeed = frame.getOrCreateTag().getFloat("ProjectileSpeed");
+                    if (configSpeed <= 0) configSpeed = 2.0f;
 
-                // 索敵範囲
-                double range = 128.0;
-                AABB searchArea = shooter.getBoundingBox().inflate(range);
+                    LivingEntity target = null;
 
-                // ターゲットの選定
-                LivingEntity target = proj.level().getEntitiesOfClass(LivingEntity.class, searchArea,
-                                e -> e != shooter && e.isAlive() && shooter.hasLineOfSight(e))
-                        .stream()
-                        .min(Comparator.comparingDouble(e -> e.distanceToSqr(shooter)))
-                        .orElse(null);
-
-                // --- ここが重要：ターゲットが見つかった場合のみワープ ---
-                if (target != null) {
-                    try {
-                        // ターゲットの少し上（胴体）を狙う
-                        Vec3 targetPos = target.position().add(0, target.getBbHeight() * 0.7, 0);
-
-                        // 1. 位置を移動（ワープ）
-                        proj.setPos(targetPos.x, targetPos.y, targetPos.z);
-
-                        // 2. 弾道を真下に固定し、即座に当たり判定を発生させる
-                        // TaCZの弾などは速度がないと消える場合があるため、微弱な速度を与える
-                        proj.setDeltaMovement(new Vec3(0, -0.1, 0));
-
-                        // 3. 演出
-                        proj.level().playSound(null, shooter.blockPosition(),
-                                SoundEvents.EXPERIENCE_ORB_PICKUP, SoundSource.PLAYERS, 0.4F, 2.0F);
-                    } catch (Exception e) {
-                        // 万が一の座標計算エラー時もクラッシュさせない
-                        // そのまま通常の弾道で飛ばす
+                    // 1. UUIDによる継続追跡
+                    if (nbt.hasUUID("TargetUUID")) {
+                        UUID targetId = nbt.getUUID("TargetUUID");
+                        for (ServerLevel world : currentLevel.getServer().getAllLevels()) {
+                            Entity e = world.getEntity(targetId);
+                            if (e instanceof LivingEntity le && le.isAlive()) {
+                                target = le;
+                                if (world.dimension() != currentLevel.dimension()) {
+                                    crossDimensionWarp(proj, world, target);
+                                    return;
+                                }
+                                break;
+                            }
+                        }
                     }
-                }
-                // target == null の場合は何も処理しないため、
-                // 弾はそのままプレイヤーが撃った方向へ通常通り飛んでいく
-            });
+
+                    // 2. 新規索敵 (設定されたSearchRangeを使用)
+                    if (target == null) {
+                        double range = frame.getOrCreateTag().getInt("SearchRange");
+                        if (range <= 0) range = 32;
+
+                        target = currentLevel.getEntitiesOfClass(LivingEntity.class, proj.getBoundingBox().inflate(range),
+                                        e -> e != shooter && e.isAlive())
+                                .stream()
+                                .min(Comparator.comparingDouble(e -> e.distanceToSqr(proj)))
+                                .orElse(null);
+
+                        if (target != null) {
+                            nbt.putUUID("TargetUUID", target.getUUID());
+                            performWarp(proj, target, configSpeed);
+                        }
+                    } else {
+                        // 3. 誘導ロジック (5ブロック以上離れていたらワープ、近ければ精密誘導)
+                        double distance = proj.position().distanceTo(target.position());
+                        if (distance > 5.0) {
+                            performWarp(proj, target, configSpeed);
+                        } else {
+                            followTarget(proj, target, configSpeed);
+                        }
+                    }
+                });
+    }
+
+    private void crossDimensionWarp(Projectile proj, ServerLevel targetWorld, LivingEntity target) {
+        Vec3 targetPos = target.position().add(0, target.getBbHeight() * 0.5, 0);
+        proj.changeDimension(targetWorld, new net.minecraftforge.common.util.ITeleporter() {
+            @Override
+            public Entity placeEntity(Entity entity, ServerLevel currentWorld, ServerLevel destWorld, float yaw, java.util.function.Function<Boolean, Entity> repositionEntity) {
+                Entity placedEntity = repositionEntity.apply(false);
+                placedEntity.teleportTo(targetPos.x, targetPos.y, targetPos.z);
+                return placedEntity;
+            }
+        });
+    }
+
+    private void performWarp(Projectile proj, LivingEntity target, float speed) {
+        Vec3 targetPos = target.position().add(0, target.getBbHeight() * 0.5, 0);
+        Vec3 dir = proj.getDeltaMovement().normalize();
+        if (dir.lengthSqr() < 0.01) dir = proj.getForward();
+
+        // ターゲットの背後ではなく、進行方向を維持したまま直前にワープ
+        Vec3 warpPos = targetPos.subtract(dir.scale(1.5));
+
+        proj.setPos(warpPos.x, warpPos.y, warpPos.z);
+        proj.setDeltaMovement(dir.scale(speed));
+
+        // ワープ演出：エンド風の粒子
+        if (proj.level() instanceof ServerLevel sl) {
+            sl.sendParticles(net.minecraft.core.particles.ParticleTypes.PORTAL, proj.getX(), proj.getY(), proj.getZ(), 5, 0.1, 0.1, 0.1, 0.05);
         }
     }
 
-    @Override
-    public boolean isFoil(ItemStack stack) {
-        return true;
+    private void followTarget(Projectile proj, LivingEntity target, float speed) {
+        Vec3 targetPos = target.position().add(0, target.getBbHeight() * 0.5, 0);
+        Vec3 toTarget = targetPos.subtract(proj.position()).normalize();
+        proj.setDeltaMovement(toTarget.scale(speed));
+        proj.setNoGravity(true);
+        // 見た目の向きを調整
+        proj.setYRot((float) (Math.atan2(toTarget.x, toTarget.z) * (180 / Math.PI)));
+        proj.setXRot((float) (Math.atan2(-toTarget.y, toTarget.horizontalDistance()) * (180 / Math.PI)));
     }
 
     @Override
     public void appendHoverText(ItemStack stack, @Nullable Level level, List<Component> tooltip, TooltipFlag flag) {
-        tooltip.add(Component.translatable("tooltip.skullheart.psycho_frame.desc").withStyle(ChatFormatting.GREEN));
-        tooltip.add(Component.translatable("tooltip.skullheart.psycho_frame.usage").withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC));
+        CompoundTag tag = stack.getOrCreateTag();
+        int range = tag.getInt("SearchRange");
+        float speed = tag.getFloat("ProjectileSpeed");
+        if (range <= 0) range = 32;
+        if (speed <= 0) speed = 2.0f;
+
+        tooltip.add(Component.literal("Skull Heart Project - 空間転送式サイコミュ").withStyle(ChatFormatting.DARK_PURPLE, ChatFormatting.ITALIC));
+        tooltip.add(Component.literal("索敵システム：").append(Component.literal(range + "m").withStyle(ChatFormatting.GREEN, ChatFormatting.BOLD)));
+        tooltip.add(Component.literal("推進スラスター：").append(Component.literal("x" + speed).withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD)));
+        tooltip.add(Component.literal(" "));
+        tooltip.add(Component.literal("右クリック: 索敵範囲拡張 (最大1024m)").withStyle(ChatFormatting.GRAY));
+        tooltip.add(Component.literal("Shift+右クリック: 弾速（追従性）変更").withStyle(ChatFormatting.GRAY));
+        tooltip.add(Component.literal("※ 異次元を含む全領域のターゲットを捕捉可能").withStyle(ChatFormatting.AQUA));
     }
 }

@@ -1,0 +1,39 @@
+{
+  "item.skullheart.particle_accelerator": "粒子加速器",
+  "itemGroup.skullheart": "スカルハート",
+  "msg.skullheart.mode_switched": "粒子加速モード:",
+  "msg.skullheart.boost_status": "加速出力:",
+  "item.skullheart.particle_accelerator": "粒子加速器「ザンネック・ハロー」",
+
+  "item.skullheart.particle_accelerator": "粒子加速器「ザンネック・ハロー」",
+
+  "mode.skullheart.particle_accelerator.0": "低出力 (x10)",
+  "mode.skullheart.particle_accelerator.1": "中出力 (x100)",
+  "mode.skullheart.particle_accelerator.2": "高出力 (x1000)",
+  "mode.skullheart.particle_accelerator.3": "リミッター解除 (MAX)",
+  "mode.skullheart.particle_accelerator.4": "システムリセット",
+
+  "msg.skullheart.particle_accelerator.mode_change": "粒子加速モード：",
+  "msg.skullheart.particle_accelerator.reset": "粒子蓄積をリセットしました",
+  "msg.skullheart.particle_accelerator.max_output": "！！！リミッター解除：最大出力！！！",
+
+  "tooltip.skullheart.particle_accelerator.mode": "現在の出力モード: ",
+  "tooltip.skullheart.particle_accelerator.boost": "蓄積粒子量",
+  "tooltip.skullheart.particle_accelerator.warning": "【警告】リミッター解除中：時空への干渉を確認",
+
+  "tooltip.skullheart.particle_accelerator.usage.title": "■ 操作マニュアル",
+  "tooltip.skullheart.particle_accelerator.usage.charge": "・右クリック：粒子をチャージ（モード依存）",
+  "tooltip.skullheart.particle_accelerator.usage.switch": "・Shift+右クリック：出力モードの切替 / リセット",
+  "tooltip.skullheart.particle_accelerator.usage.effect": "・Curios枠に装備中、全ての射撃物に加速粒子を付与",
+  "item.skullheart.gn_particles": "GN粒子",
+  "enchantment.skullheart.gn_bullet": "GNバレット",
+  "tooltip.skullheart.gn_particles.desc": "高濃度に圧縮された崩壊粒子。あらゆる熱源を凌駕する。",
+  "tooltip.skullheart.gn_particles.usage": "金床でTaCZの銃と合成し「GNバレット」を付与する。",
+
+  "tooltip.skullheart.gn_bullet.desc": "GNドライヴ直結：弾丸とエネルギーが常に最大値で固定される",
+  "item.skullheart.psycho_frame": "極限稼働サイコフレーム",
+  "tooltip.skullheart.psycho_frame.desc": "感応波を物理的圧力へ変換し、空間を跳躍させる。",
+  "tooltip.skullheart.psycho_frame.slot_info": "推奨スロット: 背中 / 頭",
+  "tooltip.skullheart.psycho_frame.usage": "装備中、射撃物が最も近い敵へ即座に転送される。"
+
+}

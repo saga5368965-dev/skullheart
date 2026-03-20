@@ -1,0 +1,15 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "NBN",
+    "CGC",
+    "NBN"
+  ],
+  "key": {
+    "N": { "item": "minecraft:netherite_ingot" },
+    "B": { "item": "minecraft:bell" },
+    "G": { "item": "skullheart:gn_particles" },
+    "C": { "item": "minecraft:beacon" }
+  },
+  "result": { "item": "skullheart:particle_accelerator", "count": 1 }
+}
