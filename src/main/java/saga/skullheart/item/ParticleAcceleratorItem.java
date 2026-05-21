@@ -38,7 +38,29 @@ public class ParticleAcceleratorItem extends Item {
         MinecraftForge.EVENT_BUS.register(this);
     }
 
-    // --- 使用処理・モード管理はそのまま ---
+    /**
+     * 【静的ヘルパー】他クラスからザンネック・ハローの所持状態とブースト強度を安全に取得するためのメソッド
+     */
+    public static ItemStack getAccelerator(Player player) {
+        var curiosOpt = CuriosApi.getCuriosInventory(player);
+        if (curiosOpt.isPresent()) {
+            var handler = curiosOpt.resolve().get().getEquippedCurios();
+            for (int i = 0; i < handler.getSlots(); i++) {
+                ItemStack stack = handler.getStackInSlot(i);
+                if (!stack.isEmpty() && stack.getItem() instanceof ParticleAcceleratorItem) {
+                    return stack;
+                }
+            }
+        }
+        for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
+            ItemStack stack = player.getInventory().getItem(i);
+            if (!stack.isEmpty() && stack.getItem() instanceof ParticleAcceleratorItem) {
+                return stack;
+            }
+        }
+        return ItemStack.EMPTY;
+    }
+
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
         ItemStack stack = player.getItemInHand(hand);
@@ -80,17 +102,14 @@ public class ParticleAcceleratorItem extends Item {
         return switch (mode) { case 0 -> 1; case 1 -> 10; case 2 -> 50; case 3 -> 100; case 4 -> -1; default -> 0; };
     }
 
-    // --- ここが修正ポイント：PlayerTickではなくLevelTickで全弾丸を監視 ---
     @SubscribeEvent
     public void onLevelTick(TickEvent.LevelTickEvent event) {
         if (event.phase != TickEvent.Phase.START || event.level.isClientSide) return;
 
-        // ワールド内のすべての弾丸をスキャン（サイコミュと同じ広範囲）
         AABB scanArea = new AABB(-20000, -64, -20000, 20000, 320, 20000);
         event.level.getEntitiesOfClass(Projectile.class, scanArea, proj -> proj.isAlive() && proj.getOwner() instanceof Player).forEach(proj -> {
             Player shooter = (Player) proj.getOwner();
 
-            // 射撃側がハロー（このアイテム）をCuriosに装備しているか確認
             CuriosApi.getCuriosHelper().findFirstCurio(shooter, this).ifPresent(slotResult -> {
                 int boost = slotResult.stack().getOrCreateTag().getInt("BoostLevel");
                 if (boost > 0) {
@@ -104,19 +123,16 @@ public class ParticleAcceleratorItem extends Item {
         p.setNoGravity(true);
         p.noPhysics = true;
 
-        // 500倍設定（半径500m）
         double hitRadius = 1.0D + boost;
         AABB hitArea = p.getBoundingBox().inflate(hitRadius);
         float damage = (boost >= MAX_BOOST) ? Float.MAX_VALUE : (boost * 200.0F);
 
-        // 弾丸の周囲の敵をなぎ倒す
         p.level().getEntitiesOfClass(LivingEntity.class, hitArea, e -> e != shooter && e.isAlive())
                 .forEach(target -> {
                     target.hurt(p.damageSources().indirectMagic(p, shooter), damage);
                     target.invulnerableTime = 0;
                 });
 
-        // 演出
         if (p.tickCount % 5 == 0) {
             var type = (boost >= 250) ? net.minecraft.core.particles.ParticleTypes.SONIC_BOOM : net.minecraft.core.particles.ParticleTypes.END_ROD;
             p.level().addParticle(type, p.getX(), p.getY(), p.getZ(), 0, 0, 0);
@@ -130,7 +146,6 @@ public class ParticleAcceleratorItem extends Item {
         }
     }
 
-    // --- レンダラー・ツールチップはそのまま ---
     @Override
     public void initializeClient(Consumer<IClientItemExtensions> consumer) {
         consumer.accept(new IClientItemExtensions() {
@@ -156,5 +171,7 @@ public class ParticleAcceleratorItem extends Item {
             if (boost >= MAX_BOOST) tooltip.add(Component.literal("【警告】全域焦土化リミッター解除済").withStyle(ChatFormatting.RED, ChatFormatting.BOLD));
             else tooltip.add(Component.literal("推定威力: ").append(Component.literal((boost * 200) + " /tick").withStyle(ChatFormatting.RED)));
         }
+        tooltip.add(Component.literal(""));
+        tooltip.add(Component.literal("§7[同調] ファンネルシステムへ超高出力ミノフスキー粒子を供給可能").withStyle(ChatFormatting.DARK_GRAY));
     }
 }

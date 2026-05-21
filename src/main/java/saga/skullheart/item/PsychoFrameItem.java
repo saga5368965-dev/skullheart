@@ -35,6 +35,31 @@ public class PsychoFrameItem extends Item {
         MinecraftForge.EVENT_BUS.register(this);
     }
 
+    /**
+     * 【静的ヘルパー】他クラスからサイコフレームの所持状態とNBTデータを安全に読み出すためのメソッド
+     */
+    public static ItemStack getPsychoFrame(Player player) {
+        // 1. Curiosスロットを優先的にスキャン
+        var curiosOpt = CuriosApi.getCuriosInventory(player);
+        if (curiosOpt.isPresent()) {
+            var handler = curiosOpt.resolve().get().getEquippedCurios();
+            for (int i = 0; i < handler.getSlots(); i++) {
+                ItemStack stack = handler.getStackInSlot(i);
+                if (!stack.isEmpty() && stack.getItem() instanceof PsychoFrameItem) {
+                    return stack;
+                }
+            }
+        }
+        // 2. 通常インベントリ内をスキャン
+        for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
+            ItemStack stack = player.getInventory().getItem(i);
+            if (!stack.isEmpty() && stack.getItem() instanceof PsychoFrameItem) {
+                return stack;
+            }
+        }
+        return ItemStack.EMPTY;
+    }
+
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
         ItemStack stack = player.getItemInHand(hand);
@@ -73,7 +98,6 @@ public class PsychoFrameItem extends Item {
     public void onProjectileUpdate(TickEvent.LevelTickEvent event) {
         if (event.phase != TickEvent.Phase.START || event.level.isClientSide || !(event.level instanceof ServerLevel currentLevel)) return;
 
-        // 弾丸スキャン範囲（プレイヤーが装備している場合のみ実行）
         AABB scanArea = new AABB(-20000, -64, -20000, 20000, 320, 20000);
         event.level.getEntitiesOfClass(Projectile.class, scanArea,
                         proj -> proj.isAlive() && proj.getOwner() instanceof Player shooter &&
@@ -88,7 +112,6 @@ public class PsychoFrameItem extends Item {
 
                     LivingEntity target = null;
 
-                    // 1. UUIDによる継続追跡
                     if (nbt.hasUUID("TargetUUID")) {
                         UUID targetId = nbt.getUUID("TargetUUID");
                         for (ServerLevel world : currentLevel.getServer().getAllLevels()) {
@@ -104,7 +127,6 @@ public class PsychoFrameItem extends Item {
                         }
                     }
 
-                    // 2. 新規索敵 (設定されたSearchRangeを使用)
                     if (target == null) {
                         double range = frame.getOrCreateTag().getInt("SearchRange");
                         if (range <= 0) range = 32;
@@ -120,7 +142,6 @@ public class PsychoFrameItem extends Item {
                             performWarp(proj, target, configSpeed);
                         }
                     } else {
-                        // 3. 誘導ロジック (5ブロック以上離れていたらワープ、近ければ精密誘導)
                         double distance = proj.position().distanceTo(target.position());
                         if (distance > 5.0) {
                             performWarp(proj, target, configSpeed);
@@ -148,13 +169,11 @@ public class PsychoFrameItem extends Item {
         Vec3 dir = proj.getDeltaMovement().normalize();
         if (dir.lengthSqr() < 0.01) dir = proj.getForward();
 
-        // ターゲットの背後ではなく、進行方向を維持したまま直前にワープ
         Vec3 warpPos = targetPos.subtract(dir.scale(1.5));
 
         proj.setPos(warpPos.x, warpPos.y, warpPos.z);
         proj.setDeltaMovement(dir.scale(speed));
 
-        // ワープ演出：エンド風の粒子
         if (proj.level() instanceof ServerLevel sl) {
             sl.sendParticles(net.minecraft.core.particles.ParticleTypes.PORTAL, proj.getX(), proj.getY(), proj.getZ(), 5, 0.1, 0.1, 0.1, 0.05);
         }
@@ -165,7 +184,6 @@ public class PsychoFrameItem extends Item {
         Vec3 toTarget = targetPos.subtract(proj.position()).normalize();
         proj.setDeltaMovement(toTarget.scale(speed));
         proj.setNoGravity(true);
-        // 見た目の向きを調整
         proj.setYRot((float) (Math.atan2(toTarget.x, toTarget.z) * (180 / Math.PI)));
         proj.setXRot((float) (Math.atan2(-toTarget.y, toTarget.horizontalDistance()) * (180 / Math.PI)));
     }
@@ -183,7 +201,9 @@ public class PsychoFrameItem extends Item {
         tooltip.add(Component.literal("推進スラスター：").append(Component.literal("x" + speed).withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD)));
         tooltip.add(Component.literal(" "));
         tooltip.add(Component.literal("右クリック: 索敵範囲拡張 (最大1024m)").withStyle(ChatFormatting.GRAY));
-        tooltip.add(Component.literal("Shift+右クリック: 弾速（追従性）変更").withStyle(ChatFormatting.GRAY));
+        tooltip.add(Component.literal("Shift+rightクリック: 弾速（追従性）変更").withStyle(ChatFormatting.GRAY));
+        tooltip.add(Component.literal(""));
+        tooltip.add(Component.literal("§7[同調] ファンネルシステムとサイコミュ共鳴可能").withStyle(ChatFormatting.DARK_GRAY));
         tooltip.add(Component.literal("※ 異次元を含む全領域のターゲットを捕捉可能").withStyle(ChatFormatting.AQUA));
     }
 }

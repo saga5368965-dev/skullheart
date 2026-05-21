@@ -3,6 +3,10 @@
     {
       "name": "back",
       "size": 2
+    },
+    {
+      "name": "hands",
+      "size": 2
     }
   ]
 }
