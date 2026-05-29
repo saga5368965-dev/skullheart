@@ -4,6 +4,7 @@ import com.tacz.guns.api.TimelessAPI;
 import com.tacz.guns.api.entity.IGunOperator;
 import com.tacz.guns.item.ModernKineticGunItem;
 import com.tacz.guns.resource.pojo.data.gun.BulletData;
+import com.tacz.guns.resource.pojo.data.gun.FireSound;
 import com.tacz.guns.resource.pojo.data.gun.GunData;
 import com.tacz.guns.entity.EntityKineticBullet;
 import net.minecraft.commands.arguments.EntityAnchorArgument;
@@ -17,16 +18,19 @@ import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraftforge.fml.LogicalSide;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.OwnableEntity;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
-import net.minecraft.world.entity.ai.attributes.Attributes;
+
 import net.minecraft.world.entity.boss.enderdragon.EnderDragon;
 import net.minecraft.world.entity.boss.wither.WitherBoss;
 import net.minecraft.world.entity.monster.Enemy;
@@ -45,7 +49,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-public class FunnelTurretEntity extends LivingEntity {
+public class FunnelTurretEntity extends LivingEntity implements OwnableEntity {
 
     private static final EntityDataAccessor<ItemStack> DATA_ITEM = SynchedEntityData.defineId(FunnelTurretEntity.class, EntityDataSerializers.ITEM_STACK);
     private static final EntityDataAccessor<Optional<UUID>> DATA_OWNER = SynchedEntityData.defineId(FunnelTurretEntity.class, EntityDataSerializers.OPTIONAL_UUID);
@@ -70,6 +74,10 @@ public class FunnelTurretEntity extends LivingEntity {
         this.noCulling = true;
         this.gunOperator = IGunOperator.fromLivingEntity(this);
         this.setNoGravity(true);
+
+        // 🔧 B案: ファンネルエンティティであることを識別するための永続データフラグ
+        // 他MOD（TheDomainOfFadeCurioなど）がこのエンティティを誤って処理するのを防ぐ
+        this.getPersistentData().putBoolean("skullheart_funnel_turret", true);
     }
 
     public static AttributeSupplier.Builder createAttributes() {
@@ -100,9 +108,11 @@ public class FunnelTurretEntity extends LivingEntity {
         if (owner != null) this.entityData.set(DATA_OWNER, Optional.of(owner.getUUID()));
     }
 
+    @Override
+    @Nullable
     public UUID getOwnerUUID() { return this.entityData.get(DATA_OWNER).orElse(null); }
 
-    @Nullable
+    @Override
     public LivingEntity getOwner() {
         if (cachedOwner == null || !cachedOwner.isAlive()) {
             UUID uuid = getOwnerUUID();
@@ -129,6 +139,11 @@ public class FunnelTurretEntity extends LivingEntity {
         return hasGun() ? (ModernKineticGunItem) getStoredItem().getItem() : null;
     }
 
+    // 🔧 B案: ファンネルかどうかを外部から判定できる静的メソッド
+    public static boolean isFunnelTurret(Entity entity) {
+        return entity instanceof FunnelTurretEntity;
+    }
+
     @Override public boolean hurt(DamageSource source, float amount) { return false; }
     @Override public boolean isInvulnerableTo(DamageSource source) { return true; }
     @Override public boolean ignoreExplosion() { return true; }
@@ -146,10 +161,10 @@ public class FunnelTurretEntity extends LivingEntity {
 
         if (level().isClientSide) {
             addIdleParticles();
-            LivingEntity owner = getOwner();
-            if (owner != null && owner.isAlive()) {
+            Entity owner = getOwner();
+            if (owner instanceof LivingEntity livingOwner && livingOwner.isAlive()) {
                 if (!hasGun()) {
-                    idleOrbit(owner);
+                    idleOrbit(livingOwner);
                 } else {
                     if (!gunDrawn) {
                         gunOperator.draw(this::getStoredItem);
@@ -158,21 +173,21 @@ public class FunnelTurretEntity extends LivingEntity {
                     if (currentTarget != null && currentTarget.isAlive()) {
                         attackOrbit(currentTarget);
                     } else {
-                        idleOrbit(owner);
+                        idleOrbit(livingOwner);
                     }
                 }
             }
             return;
         }
 
-        LivingEntity owner = getOwner();
-        if (owner == null || !owner.isAlive()) {
+        Entity owner = getOwner();
+        if (!(owner instanceof LivingEntity livingOwner) || !livingOwner.isAlive()) {
             this.discard();
             return;
         }
 
         if (!hasGun()) {
-            idleOrbit(owner);
+            idleOrbit(livingOwner);
             return;
         }
 
@@ -181,19 +196,19 @@ public class FunnelTurretEntity extends LivingEntity {
             gunDrawn = true;
         }
 
-        Optional<LivingEntity> optTarget = findTarget(owner);
+        Optional<LivingEntity> optTarget = findTarget(livingOwner);
         if (optTarget.isPresent()) {
             currentTarget = optTarget.get();
             attackOrbit(currentTarget);
 
             long currentTime = level().getGameTime();
             if (currentTime >= nextShootTime && distanceTo(currentTarget) <= ATTACK_RANGE) {
-                tryShoot(currentTarget, owner);
+                tryShoot(currentTarget, livingOwner);
                 nextShootTime = currentTime + calculateCooldown();
             }
         } else {
             currentTarget = null;
-            idleOrbit(owner);
+            idleOrbit(livingOwner);
         }
 
         if (fireCharge > 0) fireCharge -= 0.1;
@@ -227,14 +242,26 @@ public class FunnelTurretEntity extends LivingEntity {
     }
 
     private void tryShoot(LivingEntity target, LivingEntity owner) {
+        // 🔧 強化: オーナーを絶対に攻撃しない（多重チェック）
+        if (target == owner || target.getUUID().equals(owner.getUUID())) {
+            return;
+        }
+
+        // 🔧 追加: 万が一オーナーのUUIDが一致しなくても、オーナー自身かどうかを念入りにチェック
+        if (owner instanceof Player && target instanceof Player) {
+            if (owner.getUUID().equals(target.getUUID())) {
+                return;
+            }
+        }
+
         if (!hasGun() || !(level() instanceof ServerLevel serverLevel)) return;
 
         ModernKineticGunItem gunItem = getGunItem();
-        ItemStack originalStack = getStoredItem();
-        if (gunItem == null || originalStack.isEmpty()) return;
+        ItemStack gunStack = getStoredItem();
+        if (gunItem == null || gunStack.isEmpty()) return;
 
-        ResourceLocation gunId = gunItem.getGunId(originalStack);
-        if (gunId == null || gunId.getPath().isEmpty()) return;
+        ResourceLocation gunId = gunItem.getGunId(gunStack);
+        if (gunId == null) return;
 
         var indexOptional = TimelessAPI.getCommonGunIndex(gunId);
         if (indexOptional.isEmpty()) return;
@@ -249,26 +276,23 @@ public class FunnelTurretEntity extends LivingEntity {
         ResourceLocation ammoId = gunData.getAmmoId();
 
         this.lookAt(EntityAnchorArgument.Anchor.EYES, target.getEyePosition());
-        ItemStack shootableGunStack = originalStack.copy();
 
-        // ★★★ GunFireEvent を発火させる（正しい3引数コンストラクタ）★★★
+        ItemStack shootableStack = gunStack.copy();
+
         com.tacz.guns.api.event.common.GunFireEvent gunFireEvent = new com.tacz.guns.api.event.common.GunFireEvent(
-                this,                                   // shooter (タレット自身)
-                shootableGunStack,                      // 使用する銃
-                LogicalSide.SERVER                      // サーバー側
+                this, shootableStack, LogicalSide.SERVER
         );
 
         if (net.minecraftforge.common.MinecraftForge.EVENT_BUS.post(gunFireEvent)) {
-            // イベントがキャンセルされた場合（マナ不足など）、発射を中止
             return;
         }
 
         EntityKineticBullet bullet;
         try {
             bullet = new EntityKineticBullet(
-                    serverLevel, this, shootableGunStack, ammoId, gunId, true, gunData, bulletData
+                    serverLevel, this, shootableStack, ammoId, gunId, true, gunData, bulletData
             );
-        } catch (NullPointerException npe) {
+        } catch (Exception e) {
             return;
         }
 
@@ -276,53 +300,46 @@ public class FunnelTurretEntity extends LivingEntity {
 
         float speed = bulletData.getSpeed();
         Vec3 lookVec = this.getLookAngle();
-        bullet.setDeltaMovement(lookVec.scale(speed));
         bullet.shoot(lookVec.x, lookVec.y, lookVec.z, speed, 0.0F);
+
+        // 🔧 追加: 弾丸の永続データに「発射元ファンネルのオーナーUUID」を記録
+        // これで弾丸が当たった時にオーナーかどうか判定できる
+        bullet.getPersistentData().putUUID("funnel_owner_uuid", owner.getUUID());
+        bullet.getPersistentData().putBoolean("from_funnel_turret", true);
 
         if (serverLevel.addFreshEntity(bullet)) {
             fireCharge = 1.0;
-            serverLevel.sendParticles(ParticleTypes.FLASH, this.getX() + lookVec.x, this.getY() + 1.0 + lookVec.y, this.getZ() + lookVec.z, 1, 0, 0, 0, 0);
-            playFireSoundReflective(serverLevel, gunIndex, gunData, gunId);
+
+            serverLevel.sendParticles(ParticleTypes.FLASH,
+                    this.getX() + lookVec.x,
+                    this.getY() + 1.0 + lookVec.y,
+                    this.getZ() + lookVec.z,
+                    1, 0, 0, 0, 0);
+
+            playFireSound(serverLevel, gunData, gunId);
         }
     }
-    private void playFireSoundReflective(ServerLevel serverLevel, Object gunIndex, GunData gunData, ResourceLocation gunId) {
+
+    private void playFireSound(ServerLevel serverLevel, GunData gunData, ResourceLocation gunId) {
         try {
-            ResourceLocation fireSoundUri = resolveFireSoundReflective(gunIndex, gunData, gunId);
-            if (fireSoundUri != null) {
-                serverLevel.playSound(null, this.getX(), this.getY(), this.getZ(),
-                        net.minecraft.sounds.SoundEvent.createVariableRangeEvent(fireSoundUri),
-                        SoundSource.PLAYERS, 0.7F, 1.0F + (random.nextFloat() - random.nextFloat() * 0.15F));
-            } else {
-                serverLevel.playSound(null, this.getX(), this.getY(), this.getZ(),
-                        SoundEvents.GENERIC_EXPLODE, SoundSource.PLAYERS, 0.4F, 1.8F);
+            ResourceLocation soundLocation = new ResourceLocation(gunId.getNamespace(), gunId.getPath() + "_fire");
+
+            FireSound fireSound = gunData.getFireSound();
+            float volumeMultiplier = 1.0F;
+            if (fireSound != null) {
+                volumeMultiplier = fireSound.getFireMultiplier();
             }
+
+            float volume = 0.7F * volumeMultiplier;
+            float pitch = 1.0F + (random.nextFloat() - random.nextFloat() * 0.15F);
+
+            serverLevel.playSound(null, this.getX(), this.getY(), this.getZ(),
+                    SoundEvent.createVariableRangeEvent(soundLocation),
+                    SoundSource.PLAYERS, volume, pitch);
         } catch (Exception e) {
             serverLevel.playSound(null, this.getX(), this.getY(), this.getZ(),
                     SoundEvents.GENERIC_EXPLODE, SoundSource.PLAYERS, 0.4F, 1.8F);
         }
-    }
-
-    private ResourceLocation resolveFireSoundReflective(Object gunIndexObj, GunData gunData, ResourceLocation gunId) {
-        try {
-            if (gunIndexObj != null) {
-                try {
-                    java.lang.reflect.Method m = gunIndexObj.getClass().getMethod("getSounds");
-                    Object soundsObj = m.invoke(gunIndexObj);
-                    if (soundsObj != null) {
-                        ResourceLocation rl = extractResourceFromSoundHolderReflective(soundsObj);
-                        if (rl != null) return rl;
-                    }
-                } catch (NoSuchMethodException ignored) {}
-            }
-            try {
-                java.lang.reflect.Method m2 = gunData.getClass().getMethod("getFireSound");
-                Object res = m2.invoke(gunData);
-                if (res instanceof ResourceLocation r) return r;
-                if (res instanceof String s && !s.isEmpty()) return new ResourceLocation(s);
-            } catch (NoSuchMethodException ignored) {}
-        } catch (Exception ignored) {}
-
-        return new ResourceLocation(gunId.getNamespace(), gunId.getPath() + "_fire");
     }
 
     private ResourceLocation extractResourceFromSoundHolderReflective(Object soundsObj) {
@@ -356,7 +373,16 @@ public class FunnelTurretEntity extends LivingEntity {
 
         AABB area = this.getBoundingBox().inflate(SCAN_RANGE);
         List<LivingEntity> entities = level().getEntitiesOfClass(LivingEntity.class, area, entity -> {
+            // 🔧 強化: オーナーとファンネル自身を完全に除外
             if (entity.getUUID().equals(this.getUUID()) || entity == owner || entity.getUUID().equals(ownerUuid) || !entity.isAlive() || entity instanceof FunnelTurretEntity) return false;
+
+            // 🔧 追加: 同じプレイヤーの他のファンネルも誤ってターゲットしないようにする
+            if (entity instanceof FunnelTurretEntity otherTurret) {
+                UUID otherOwnerUUID = otherTurret.getOwnerUUID();
+                if (otherOwnerUUID != null && otherOwnerUUID.equals(ownerUuid)) {
+                    return false;
+                }
+            }
 
             if (owner instanceof Player p && entity instanceof Player targetP) {
                 if (targetP.isAlliedTo(p) || p.isAlliedTo(targetP) || targetP.isCreative()) return false;
@@ -377,7 +403,8 @@ public class FunnelTurretEntity extends LivingEntity {
 
         if (tacticMode != 3) {
             entities.sort(Comparator.comparingDouble(this::distanceTo));
-            int activeTurrets = owner.level().getEntitiesOfClass(FunnelTurretEntity.class, owner.getBoundingBox().inflate(15)).size();
+            int activeTurrets = (int) owner.level().getEntitiesOfClass(FunnelTurretEntity.class, owner.getBoundingBox().inflate(15))
+                    .stream().filter(t -> ownerUuid.equals(t.getOwnerUUID())).count();
             int targetSelectIndex = this.turretIndex % Math.max(1, activeTurrets);
             if (targetSelectIndex < entities.size()) {
                 return Optional.of(entities.get(targetSelectIndex));
@@ -510,8 +537,22 @@ public class FunnelTurretEntity extends LivingEntity {
     }
 
     @Override public Iterable<ItemStack> getArmorSlots() { return List.of(); }
-    @Override public ItemStack getItemBySlot(net.minecraft.world.entity.EquipmentSlot slot) { return ItemStack.EMPTY; }
-    @Override public void setItemSlot(net.minecraft.world.entity.EquipmentSlot slot, ItemStack stack) {}
+
+    @Override
+    public ItemStack getItemBySlot(net.minecraft.world.entity.EquipmentSlot slot) {
+        if (slot == net.minecraft.world.entity.EquipmentSlot.MAINHAND) {
+            return getStoredItem();
+        }
+        return ItemStack.EMPTY;
+    }
+
+    @Override
+    public void setItemSlot(net.minecraft.world.entity.EquipmentSlot slot, ItemStack stack) {
+        if (slot == net.minecraft.world.entity.EquipmentSlot.MAINHAND) {
+            setStoredItem(stack);
+        }
+    }
+
     @Override public net.minecraft.world.entity.HumanoidArm getMainArm() { return net.minecraft.world.entity.HumanoidArm.RIGHT; }
     @Override public void heal(float amount) {}
     @Override public boolean isSensitiveToWater() { return false; }
@@ -525,6 +566,9 @@ public class FunnelTurretEntity extends LivingEntity {
         if (nbt.contains("TacticMode")) setTacticMode(nbt.getInt("TacticMode"));
         if (nbt.contains("Index")) this.turretIndex = nbt.getInt("Index");
         if (nbt.contains("NextShootTime")) this.nextShootTime = nbt.getLong("NextShootTime");
+
+        // 🔧 B案: 永続データフラグを維持
+        this.getPersistentData().putBoolean("skullheart_funnel_turret", true);
     }
 
     @Override
@@ -534,5 +578,8 @@ public class FunnelTurretEntity extends LivingEntity {
         nbt.putInt("TacticMode", getTacticMode());
         nbt.putInt("Index", turretIndex);
         nbt.putLong("NextShootTime", nextShootTime);
+
+        // 🔧 B案: 永続データフラグを保存
+        nbt.putBoolean("IsFunnelTurret", true);
     }
 }
